@@ -307,17 +307,36 @@ const connectDB = async () => {
     }
 };
 
-// Start server
-const PORT = process.env.PORT || 5000;
+// Ensure database connection is established when the module is initialized
+// This runs once when the serverless function cold starts.
+if (!mongoose.connection.readyState) {
+    connectDB().catch(err => {
+        console.error('❌ Failed to connect to MongoDB on module initialization:', err);
+        // Optionally, handle this error more gracefully, e.g., set a flag
+        // to prevent API calls that require DB access.
+    });
+}
 
-// Only start server if not in test environment and if this file is run directly (not imported)
+// Start server only if this file is run directly (for local development)
+const PORT = process.env.PORT || 5000;
 if (require.main === module && process.env.NODE_ENV !== 'test') {
-    connectDB().then(() => {
+    // Ensure DB connection is awaited before listening if run directly
+    if (mongoose.connection.readyState === 0) { // If not already connecting/connected
+        connectDB().then(() => {
+            app.listen(PORT, () => {
+                console.log(`Server running on port ${PORT}`);
+                console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+            });
+        }).catch(err => {
+            console.error('❌ Failed to start server due to DB connection error:', err);
+            process.exit(1); // Exit if local DB connection fails on startup
+        });
+    } else {
         app.listen(PORT, () => {
             console.log(`Server running on port ${PORT}`);
             console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
         });
-    });
+    }
 }
 
 module.exports = app;
