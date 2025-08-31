@@ -110,6 +110,45 @@ app.use('/upload/resume', express.static(path.join(__dirname, 'uploads', 'resume
 app.use('/upload/coverletter', express.static(path.join(__dirname, 'uploads', 'coverletters')));
 app.use('/upload/misc', express.static(path.join(__dirname, 'uploads', 'misc')));
 
+// Global variable to cache the database connection
+let cachedDb = null;
+
+// Middleware to ensure database connection before processing routes
+const ensureDbConnected = async (req, res, next) => {
+    if (mongoose.connection.readyState === 1) {
+        console.log('✅ [ensureDbConnected] Database already connected.');
+        return next();
+    }
+    if (mongoose.connection.readyState === 2) {
+        console.log('⏳ [ensureDbConnected] Database is connecting...');
+        // Wait for the connection to complete
+        try {
+            await new Promise((resolve, reject) => {
+                mongoose.connection.on('connected', resolve);
+                mongoose.connection.on('error', reject);
+            });
+            console.log('✅ [ensureDbConnected] Database connected after waiting.');
+            return next();
+        } catch (error) {
+            console.error('❌ [ensureDbConnected] Error waiting for DB connection:', error);
+            return res.status(500).json({ success: false, message: 'Failed to connect to database' });
+        }
+    }
+
+    console.log('🔌 [ensureDbConnected] Establishing new database connection...');
+    try {
+        await connectDB();
+        console.log('✅ [ensureDbConnected] Database connected successfully.');
+        next();
+    } catch (error) {
+        console.error('❌ [ensureDbConnected] Failed to establish database connection:', error);
+        res.status(500).json({ success: false, message: 'Failed to connect to database' });
+    }
+};
+
+// Apply the database connection middleware to all API routes that need it
+app.use('/api', ensureDbConnected);
+
 // Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
@@ -264,10 +303,15 @@ app.use('*', (req, res) => {
     });
 });
 
-// Database connection with comprehensive error handling
+// Cached database connection with comprehensive error handling for serverless
 const connectDB = async () => {
+    if (cachedDb && mongoose.connection.readyState === 1) {
+        console.log('♻️ [connectDB] Using existing database connection.');
+        return cachedDb;
+    }
+
+    console.log('🔌 [connectDB] Starting NEW database connection...');
     try {
-        console.log('🔌 [connectDB] Starting database connection...');
         console.log('   Environment:', process.env.NODE_ENV || 'undefined');
         console.log('   MONGODB_URI:', process.env.MONGODB_URI ? 'Set (hidden for security)' : 'NOT SET');
         console.log('   Fallback URI:', 'mongodb://localhost:27017/campus_recruitment');
@@ -275,10 +319,18 @@ const connectDB = async () => {
         const uri = process.env.MONGODB_URI || 'mongodb://localhost:27017/campus_recruitment';
         console.log('   Using URI:', uri === process.env.MONGODB_URI ? 'MONGODB_URI from env' : 'Fallback localhost');
 
+        mongoose.set('strictQuery', true); // Recommended by Mongoose
+
         const conn = await mongoose.connect(uri, {
             useNewUrlParser: true,
             useUnifiedTopology: true,
+            bufferCommands: false, // Disable buffering for serverless
+            serverSelectionTimeoutMS: 5000, // 5 seconds for server selection
+            socketTimeoutMS: 45000, // 45 seconds for socket operations
+            connectTimeoutMS: 10000, // 10 seconds for initial connection
         });
+
+        cachedDb = conn; // Cache the connection
 
         console.log('✅ [connectDB] MongoDB Connected Successfully!');
         console.log(`   Host: ${conn.connection.host}`);
@@ -296,47 +348,41 @@ const connectDB = async () => {
         if (error.code === 'ENOTFOUND') {
             console.error('   🔍 DNS resolution failed - check your MongoDB URI');
         } else if (error.code === 'ECONNREFUSED') {
-            console.error('   🔒 Connection refused - check if MongoDB is running');
+            console.error('   🔒 Connection refused - check if MongoDB is running and port is open');
         } else if (error.name === 'MongoServerError') {
             console.error('   🗄️  MongoDB server error - check credentials and network access');
+        } else if (error.name === 'MongooseServerSelectionError') {
+            console.error('   ⚠️  Mongoose server selection error - check network access or URI');
         }
 
+        // Critical: Set cachedDb to null on failure to force a reconnect on next attempt
+        cachedDb = null;
         // Don't exit on Vercel - let the server start but mark connection as failed
         console.error('   ⚠️  Server will start but database operations will fail');
-        return null;
+        throw error; // Re-throw to be caught by calling middleware/route
     }
 };
 
-// Ensure database connection is established when the module is initialized
-// This runs once when the serverless function cold starts.
-if (!mongoose.connection.readyState) {
-    connectDB().catch(err => {
-        console.error('❌ Failed to connect to MongoDB on module initialization:', err);
-        // Optionally, handle this error more gracefully, e.g., set a flag
-        // to prevent API calls that require DB access.
+// No longer directly connecting on module initialization or local server startup, 
+// as the middleware will handle it on first API request.
+// The local server start now relies on the middleware for its DB connection.
+const PORT = process.env.PORT || 5000;
+
+// If running locally, ensure DB connection and then start server
+if (require.main === module && process.env.NODE_ENV !== 'test') {
+    console.log('⚙️ [Local Server] Starting local server...');
+    // In local dev, we want to ensure connection before starting to listen
+    connectDB().then(() => {
+        app.listen(PORT, () => {
+            console.log(`✅ [Local Server] Server running on port ${PORT}`);
+            console.log(`   Environment: ${process.env.NODE_ENV || 'development'}`);
+        });
+    }).catch(err => {
+        console.error('❌ [Local Server] Failed to start server due to DB connection error:', err);
+        process.exit(1); // Exit if local DB connection fails on startup
     });
 }
 
-// Start server only if this file is run directly (for local development)
-const PORT = process.env.PORT || 5000;
-if (require.main === module && process.env.NODE_ENV !== 'test') {
-    // Ensure DB connection is awaited before listening if run directly
-    if (mongoose.connection.readyState === 0) { // If not already connecting/connected
-        connectDB().then(() => {
-            app.listen(PORT, () => {
-                console.log(`Server running on port ${PORT}`);
-                console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
-            });
-        }).catch(err => {
-            console.error('❌ Failed to start server due to DB connection error:', err);
-            process.exit(1); // Exit if local DB connection fails on startup
-        });
-    } else {
-        app.listen(PORT, () => {
-            console.log(`Server running on port ${PORT}`);
-            console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
-        });
-    }
-}
-
+// Export the app. Vercel will import this and run it as a serverless function,
+// where the ensureDbConnected middleware will handle the connection.
 module.exports = app;
