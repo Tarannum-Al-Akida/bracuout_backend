@@ -26,7 +26,7 @@ const jobFAQRoutes = require('./routes/job-faq');
 app.use(helmet());
 app.use(cors({
     origin: process.env.NODE_ENV === 'production'
-        ? ['https://bracuout-std4.vercel.app', 'https://bracuout-backend-dckn.vercel.app']
+        ? ['https://bracuout-std4.vercel.app', 'https://bracuout-backend-dckn.vercel.app', 'https://bracuout-backend-dckn-2jodwphfi-tarannum-al-akidas-projects.vercel.app']
         : ['http://localhost:3000'],
     credentials: true
 }));
