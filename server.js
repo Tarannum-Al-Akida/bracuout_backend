@@ -164,6 +164,77 @@ app.get('/api/test-files', (req, res) => {
     }
 });
 
+// Database test endpoint
+app.get('/api/test-db', async (req, res) => {
+    try {
+        console.log('🔍 [test-db] Environment variables check:');
+        console.log('   MONGODB_URI:', process.env.MONGODB_URI ? 'Set (hidden for security)' : 'NOT SET');
+        console.log('   NODE_ENV:', process.env.NODE_ENV);
+        console.log('   PORT:', process.env.PORT);
+        
+        const dbStatus = mongoose.connection.readyState;
+        console.log('🔍 [test-db] Database connection status:', dbStatus);
+        console.log('   mongoose.connection:', mongoose.connection ? 'Exists' : 'NULL');
+        console.log('   mongoose.connection.db:', mongoose.connection.db ? 'Exists' : 'NULL');
+        
+        if (mongoose.connection.db) {
+            const collections = await mongoose.connection.db.listCollections().toArray();
+            
+            res.json({
+                success: true,
+                database: {
+                    status: dbStatus === 1 ? 'connected' : 'disconnected',
+                    readyState: dbStatus,
+                    collections: collections.map(col => col.name),
+                    totalCollections: collections.length
+                },
+                environment: {
+                    MONGODB_URI: process.env.MONGODB_URI ? 'Set' : 'NOT SET',
+                    NODE_ENV: process.env.NODE_ENV || 'undefined',
+                    PORT: process.env.PORT || 'undefined'
+                },
+                connection: {
+                    host: mongoose.connection.host || 'N/A',
+                    name: mongoose.connection.name || 'N/A',
+                    port: mongoose.connection.port || 'N/A'
+                },
+                timestamp: new Date().toISOString()
+            });
+        } else {
+            res.json({
+                success: false,
+                error: 'Database connection object is null',
+                debug: {
+                    dbStatus,
+                    mongooseConnection: mongoose.connection ? 'exists' : 'null',
+                    mongooseConnectionDB: mongoose.connection.db ? 'exists' : 'null',
+                    environment: {
+                        MONGODB_URI: process.env.MONGODB_URI ? 'Set' : 'NOT SET',
+                        NODE_ENV: process.env.NODE_ENV || 'undefined'
+                    }
+                },
+                timestamp: new Date().toISOString()
+            });
+        }
+    } catch (error) {
+        console.error('❌ [test-db] Database test error:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message,
+            debug: {
+                dbStatus: mongoose.connection.readyState,
+                mongooseConnection: mongoose.connection ? 'exists' : 'null',
+                mongooseConnectionDB: mongoose.connection.db ? 'exists' : 'null',
+                environment: {
+                    MONGODB_URI: process.env.MONGODB_URI ? 'Set' : 'NOT SET',
+                    NODE_ENV: process.env.NODE_ENV || 'undefined'
+                }
+            },
+            timestamp: new Date().toISOString()
+        });
+    }
+});
+
 // Error handling middleware
 app.use((err, req, res, next) => {
     console.error(err.stack);
@@ -195,43 +266,14 @@ app.use('*', (req, res) => {
 // Database connection
 const connectDB = async () => {
     try {
-        console.log('🔌 [connectDB] Starting database connection...');
-        console.log('   Environment:', process.env.NODE_ENV || 'undefined');
-        console.log('   MONGODB_URI:', process.env.MONGODB_URI ? 'Set (hidden for security)' : 'NOT SET');
-        console.log('   Fallback URI:', 'mongodb://localhost:27017/campus_recruitment');
-        
-        const uri = process.env.MONGODB_URI || 'mongodb://localhost:27017/campus_recruitment';
-        console.log('   Using URI:', uri === process.env.MONGODB_URI ? 'MONGODB_URI from env' : 'Fallback localhost');
-        
-        const conn = await mongoose.connect(uri, {
+        const conn = await mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/campus_recruitment', {
             useNewUrlParser: true,
             useUnifiedTopology: true,
         });
-        
-        console.log('✅ [connectDB] MongoDB Connected Successfully!');
-        console.log(`   Host: ${conn.connection.host}`);
-        console.log(`   Database: ${conn.connection.name}`);
-        console.log(`   Port: ${conn.connection.port}`);
-        console.log(`   Ready State: ${conn.connection.readyState}`);
-        
-        return conn;
+        console.log(`MongoDB Connected: ${conn.connection.host}`);
     } catch (error) {
-        console.error('❌ [connectDB] Database connection failed:');
-        console.error('   Error:', error.message);
-        console.error('   Code:', error.code);
-        console.error('   Name:', error.name);
-        
-        if (error.code === 'ENOTFOUND') {
-            console.error('   🔍 DNS resolution failed - check your MongoDB URI');
-        } else if (error.code === 'ECONNREFUSED') {
-            console.error('   🔒 Connection refused - check if MongoDB is running');
-        } else if (error.name === 'MongoServerError') {
-            console.error('   🗄️  MongoDB server error - check credentials and network access');
-        }
-        
-        // Don't exit on Vercel - let the server start but mark connection as failed
-        console.error('   ⚠️  Server will start but database operations will fail');
-        return null;
+        console.error('Database connection error:', error);
+        process.exit(1);
     }
 };
 
