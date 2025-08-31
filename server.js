@@ -208,17 +208,15 @@ const connectDB = async () => {
 
 // Start server
 const PORT = process.env.PORT || 5000;
-const startServer = async () => {
-    await connectDB();
-    app.listen(PORT, () => {
-        console.log(`Server running on port ${PORT}`);
-        console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
-    });
-};
 
-// Only start server if not in test environment
-if (process.env.NODE_ENV !== 'test') {
-    startServer();
+// Only start server if not in test environment and if this file is run directly (not imported)
+if (require.main === module && process.env.NODE_ENV !== 'test') {
+    connectDB().then(() => {
+        app.listen(PORT, () => {
+            console.log(`Server running on port ${PORT}`);
+            console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+        });
+    });
 }
 
 module.exports = app;
