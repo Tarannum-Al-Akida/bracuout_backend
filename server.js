@@ -8,6 +8,9 @@ require('dotenv').config();
 
 const app = express();
 
+// Trust proxy for Vercel deployment (fixes rate limiter X-Forwarded-For issue)
+app.set('trust proxy', 1);
+
 // Import routes
 const authRoutes = require('./routes/auth');
 const userRoutes = require('./routes/users');
@@ -31,10 +34,10 @@ app.use(cors({
     credentials: true
 }));
 
-// Rate limiting
+// Rate limiting with Vercel-compatible configuration
 const limiter = rateLimit({
     windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000, // 15 minutes
-    max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || (process.env.NODE_ENV === 'production' ? 100 : 1000), // More lenient in development
+    max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || (process.env.NODE_ENV === 'production' ? 100 : 1000),
     message: {
         success: false,
         message: 'Too many requests from this IP, please try again later.',
@@ -42,27 +45,35 @@ const limiter = rateLimit({
     },
     standardHeaders: true,
     legacyHeaders: false,
+    // Fix for Vercel deployment
+    keyGenerator: (req) => {
+        // Use X-Forwarded-For header if available (Vercel sets this)
+        return req.headers['x-forwarded-for'] || req.ip || req.connection.remoteAddress;
+    },
     // Skip rate limiting for certain routes in development
     skip: (req) => {
         if (process.env.NODE_ENV === 'development') {
-            // Skip rate limiting for GET requests in development
             return req.method === 'GET';
         }
         return false;
     }
 });
 
-// Stricter rate limiter for sensitive operations (auth, job creation, etc.)
+// Stricter rate limiter for sensitive operations
 const strictLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
-    max: process.env.NODE_ENV === 'production' ? 10 : 50, // Stricter limits
+    max: process.env.NODE_ENV === 'production' ? 10 : 50,
     message: {
         success: false,
         message: 'Too many sensitive operations from this IP, please try again later.',
         retryAfter: 15
     },
     standardHeaders: true,
-    legacyHeaders: false
+    legacyHeaders: false,
+    // Fix for Vercel deployment
+    keyGenerator: (req) => {
+        return req.headers['x-forwarded-for'] || req.ip || req.connection.remoteAddress;
+    }
 });
 
 // Apply general rate limiter to all API routes
@@ -99,7 +110,7 @@ app.use('/upload/resume', express.static(path.join(__dirname, 'uploads', 'resume
 app.use('/upload/coverletter', express.static(path.join(__dirname, 'uploads', 'coverletters')));
 app.use('/upload/misc', express.static(path.join(__dirname, 'uploads', 'misc')));
 
-// API Routes
+// Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/jobs', jobRoutes);
@@ -112,16 +123,6 @@ app.use('/api/resume', resumeRoutes);
 app.use('/api/courses', courseRoutes);
 app.use('/api/connections', connectionRoutes);
 app.use('/api/job-faq', jobFAQRoutes);
-
-// Upload route for general file uploads
-app.post('/api/upload', (req, res) => {
-    // This endpoint will be handled by the fileUpload middleware
-    // It's a placeholder for the general upload functionality
-    res.status(501).json({
-        success: false,
-        message: 'Upload endpoint not implemented yet. Use specific upload endpoints.'
-    });
-});
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {
@@ -164,22 +165,22 @@ app.get('/api/test-files', (req, res) => {
     }
 });
 
-// Database test endpoint
+// Database test endpoint with comprehensive debugging
 app.get('/api/test-db', async (req, res) => {
     try {
         console.log('🔍 [test-db] Environment variables check:');
         console.log('   MONGODB_URI:', process.env.MONGODB_URI ? 'Set (hidden for security)' : 'NOT SET');
         console.log('   NODE_ENV:', process.env.NODE_ENV);
         console.log('   PORT:', process.env.PORT);
-        
+
         const dbStatus = mongoose.connection.readyState;
         console.log('🔍 [test-db] Database connection status:', dbStatus);
         console.log('   mongoose.connection:', mongoose.connection ? 'Exists' : 'NULL');
         console.log('   mongoose.connection.db:', mongoose.connection.db ? 'Exists' : 'NULL');
-        
+
         if (mongoose.connection.db) {
             const collections = await mongoose.connection.db.listCollections().toArray();
-            
+
             res.json({
                 success: true,
                 database: {
@@ -263,17 +264,46 @@ app.use('*', (req, res) => {
     });
 });
 
-// Database connection
+// Database connection with comprehensive error handling
 const connectDB = async () => {
     try {
-        const conn = await mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/campus_recruitment', {
+        console.log('🔌 [connectDB] Starting database connection...');
+        console.log('   Environment:', process.env.NODE_ENV || 'undefined');
+        console.log('   MONGODB_URI:', process.env.MONGODB_URI ? 'Set (hidden for security)' : 'NOT SET');
+        console.log('   Fallback URI:', 'mongodb://localhost:27017/campus_recruitment');
+
+        const uri = process.env.MONGODB_URI || 'mongodb://localhost:27017/campus_recruitment';
+        console.log('   Using URI:', uri === process.env.MONGODB_URI ? 'MONGODB_URI from env' : 'Fallback localhost');
+
+        const conn = await mongoose.connect(uri, {
             useNewUrlParser: true,
             useUnifiedTopology: true,
         });
-        console.log(`MongoDB Connected: ${conn.connection.host}`);
+
+        console.log('✅ [connectDB] MongoDB Connected Successfully!');
+        console.log(`   Host: ${conn.connection.host}`);
+        console.log(`   Database: ${conn.connection.name}`);
+        console.log(`   Port: ${conn.connection.port}`);
+        console.log(`   Ready State: ${conn.connection.readyState}`);
+
+        return conn;
     } catch (error) {
-        console.error('Database connection error:', error);
-        process.exit(1);
+        console.error('❌ [connectDB] Database connection failed:');
+        console.error('   Error:', error.message);
+        console.error('   Code:', error.code);
+        console.error('   Name:', error.name);
+
+        if (error.code === 'ENOTFOUND') {
+            console.error('   🔍 DNS resolution failed - check your MongoDB URI');
+        } else if (error.code === 'ECONNREFUSED') {
+            console.error('   🔒 Connection refused - check if MongoDB is running');
+        } else if (error.name === 'MongoServerError') {
+            console.error('   🗄️  MongoDB server error - check credentials and network access');
+        }
+
+        // Don't exit on Vercel - let the server start but mark connection as failed
+        console.error('   ⚠️  Server will start but database operations will fail');
+        return null;
     }
 };
 
