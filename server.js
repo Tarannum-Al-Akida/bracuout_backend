@@ -123,13 +123,135 @@ app.post('/api/upload', (req, res) => {
     });
 });
 
-// Health check endpoint
-app.get('/api/health', (req, res) => {
-    res.status(200).json({
-        status: 'OK',
-        message: 'Campus Recruitment API is running',
-        timestamp: new Date().toISOString()
-    });
+// Database connection
+const connectDB = async () => {
+    try {
+        console.log('🔌 Attempting to connect to MongoDB...');
+        console.log('📡 MongoDB URI:', process.env.MONGODB_URI ? 'Set (hidden for security)' : 'Using default localhost');
+        
+        const conn = await mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/campus_recruitment', {
+            useNewUrlParser: true,
+            useUnifiedTopology: true,
+        });
+        
+        console.log('✅ MongoDB Connected Successfully!');
+        console.log(`📍 Host: ${conn.connection.host}`);
+        console.log(`🗄️  Database: ${conn.connection.name}`);
+        console.log(`🔗 Port: ${conn.connection.port}`);
+        
+        // Monitor connection events
+        mongoose.connection.on('connected', () => {
+            console.log('🟢 Mongoose connected to MongoDB');
+        });
+        
+        mongoose.connection.on('error', (err) => {
+            console.error('🔴 Mongoose connection error:', err);
+        });
+        
+        mongoose.connection.on('disconnected', () => {
+            console.log('🟡 Mongoose disconnected from MongoDB');
+        });
+        
+        // Add query debugging in development
+        if (process.env.NODE_ENV === 'development') {
+            mongoose.set('debug', true);
+            console.log('🐛 Mongoose debug mode enabled');
+        }
+        
+        return conn;
+    } catch (error) {
+        console.error('❌ Database connection failed:');
+        console.error('   Error:', error.message);
+        console.error('   Code:', error.code);
+        console.error('   Stack:', error.stack);
+        
+        if (error.code === 'ENOTFOUND') {
+            console.error('   🔍 DNS resolution failed - check your MongoDB URI');
+        } else if (error.code === 'ECONNREFUSED') {
+            console.error('   🔒 Connection refused - check if MongoDB is running');
+        } else if (error.code === 'MONGODB_ERROR') {
+            console.error('   🗄️  MongoDB authentication failed - check credentials');
+        }
+        
+        process.exit(1);
+    }
+};
+
+// Enhanced health check endpoint with database status
+app.get('/api/health', async (req, res) => {
+    try {
+        const dbStatus = mongoose.connection.readyState;
+        const dbStatusText = {
+            0: 'disconnected',
+            1: 'connected',
+            2: 'connecting',
+            3: 'disconnecting'
+        };
+        
+        const healthData = {
+            status: 'OK',
+            message: 'Campus Recruitment API is running',
+            timestamp: new Date().toISOString(),
+            environment: process.env.NODE_ENV || 'development',
+            database: {
+                status: dbStatusText[dbStatus] || 'unknown',
+                readyState: dbStatus,
+                connected: dbStatus === 1,
+                host: mongoose.connection.host || 'N/A',
+                name: mongoose.connection.name || 'N/A'
+            },
+            memory: process.memoryUsage(),
+            uptime: process.uptime()
+        };
+        
+        // Check if database is healthy
+        if (dbStatus === 1) {
+            try {
+                // Test a simple database operation
+                await mongoose.connection.db.admin().ping();
+                healthData.database.ping = 'success';
+            } catch (pingError) {
+                healthData.database.ping = 'failed';
+                healthData.database.pingError = pingError.message;
+            }
+        }
+        
+        res.status(200).json(healthData);
+    } catch (error) {
+        console.error('Health check error:', error);
+        res.status(500).json({
+            status: 'ERROR',
+            message: 'Health check failed',
+            error: error.message,
+            timestamp: new Date().toISOString()
+        });
+    }
+});
+
+// Database test endpoint
+app.get('/api/test-db', async (req, res) => {
+    try {
+        const dbStatus = mongoose.connection.readyState;
+        const collections = await mongoose.connection.db.listCollections().toArray();
+        
+        res.json({
+            success: true,
+            database: {
+                status: dbStatus === 1 ? 'connected' : 'disconnected',
+                readyState: dbStatus,
+                collections: collections.map(col => col.name),
+                totalCollections: collections.length
+            },
+            timestamp: new Date().toISOString()
+        });
+    } catch (error) {
+        console.error('Database test error:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message,
+            timestamp: new Date().toISOString()
+        });
+    }
 });
 
 // Test file serving endpoint
@@ -191,20 +313,6 @@ app.use('*', (req, res) => {
         message: 'Route not found'
     });
 });
-
-// Database connection
-const connectDB = async () => {
-    try {
-        const conn = await mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/campus_recruitment', {
-            useNewUrlParser: true,
-            useUnifiedTopology: true,
-        });
-        console.log(`MongoDB Connected: ${conn.connection.host}`);
-    } catch (error) {
-        console.error('Database connection error:', error);
-        process.exit(1);
-    }
-};
 
 // Start server
 const PORT = process.env.PORT || 5000;

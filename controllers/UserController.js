@@ -7,21 +7,67 @@ class UserController {
     static async getUserProfile(req, res) {
         try {
             const { id } = req.params;
+            console.log('🔍 [UserController] Getting user profile for ID:', id);
+            console.log('📡 [UserController] Request headers:', JSON.stringify(req.headers, null, 2));
+            
+            // Check if ID is valid MongoDB ObjectId
+            if (!id || !require('mongoose').Types.ObjectId.isValid(id)) {
+                console.log('❌ [UserController] Invalid user ID format:', id);
+                return res.status(400).json({
+                    success: false,
+                    message: 'Invalid user ID format'
+                });
+            }
+            
+            console.log('🗄️ [UserController] Executing database query...');
+            const startTime = Date.now();
+            
             const user = await User.findById(id).select('-password');
+            const queryTime = Date.now() - startTime;
+            
+            console.log('⏱️ [UserController] Database query completed in:', queryTime + 'ms');
+            console.log('📊 [UserController] Query result:', user ? 'User found' : 'User not found');
+            
+            if (user) {
+                console.log('✅ [UserController] User details:', {
+                    id: user._id,
+                    email: user.email,
+                    role: user.role,
+                    profileFields: Object.keys(user.profile || {}),
+                    hasProfile: !!user.profile
+                });
+            }
 
             if (!user) {
+                console.log('❌ [UserController] User not found in database');
                 return res.status(404).json({
                     success: false,
                     message: 'User not found'
                 });
             }
 
+            console.log('✅ [UserController] Successfully retrieved user profile');
             res.json({
                 success: true,
                 data: { user }
             });
         } catch (error) {
-            console.error('Get user profile error:', error);
+            console.error('❌ [UserController] Get user profile error:');
+            console.error('   Error message:', error.message);
+            console.error('   Error code:', error.code);
+            console.error('   Error stack:', error.stack);
+            console.error('   Request params:', req.params);
+            console.error('   Request headers:', req.headers);
+            
+            // Check for specific MongoDB errors
+            if (error.name === 'CastError') {
+                console.error('   🗄️  MongoDB CastError - Invalid ObjectId format');
+            } else if (error.name === 'ValidationError') {
+                console.error('   📝 MongoDB ValidationError - Data validation failed');
+            } else if (error.name === 'MongoError') {
+                console.error('   🗄️  MongoDB Error:', error.code);
+            }
+            
             res.status(500).json({
                 success: false,
                 message: 'Failed to get user profile',
