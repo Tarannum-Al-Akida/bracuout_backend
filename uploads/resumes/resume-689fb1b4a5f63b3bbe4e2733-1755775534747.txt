@@ -1,0 +1,7 @@
+Name: Test User
+Email: test4@example.com
+Role: Student
+Department: cse
+Batch: 2021-2026
+Company: 
+Job Title: 
